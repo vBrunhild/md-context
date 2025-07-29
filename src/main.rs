@@ -1,4 +1,4 @@
-use std::{fs, sync::mpsc, convert::TryFrom, fmt::Display, marker::PhantomData, path::PathBuf};
+use std::{fs, path::PathBuf, sync::{mpsc, Arc, Mutex}};
 use clap::Parser;
 use threadpool::ThreadPool;
 
@@ -14,101 +14,56 @@ struct GenArgs {
     paths: Vec<PathBuf>
 }
 
-trait PathType {}
-
-struct File {}
-impl PathType for File {}
-
-struct Dir {}
-impl PathType for Dir {}
-
-#[derive(Debug, Clone)]
-struct Path<T: PathType> {
-    buf: PathBuf,
-    _type: PhantomData<T>
-}
-
-impl Path<Dir> {
-    fn read(&self) -> fs::ReadDir {
-        fs::read_dir(&self.buf).expect("should always be directory")
-    }
-}
-
-impl Path<File> {
-    fn read(&self) -> String {
-        fs::read_to_string(&self.buf).expect("should always be readable file")
-    }
-}
-
-impl<T: PathType> Display for Path<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.buf.display())
-    }
-}
-
-impl TryFrom<PathBuf> for Path<Dir> {
-    type Error = BufToPathError;
-
-    fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
-        if value.is_dir() {
-            Ok(Self { buf: value, _type: PhantomData::<_> })
-        } else {
-            Err(BufToPathError::Dir(value))
-        }
-    }
-}
-
-impl TryFrom<PathBuf> for Path<File> {
-    type Error = BufToPathError;
-
-    fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
-        if value.is_file() {
-            Ok(Self { buf: value, _type: PhantomData::<_> })
-        } else {
-            Err(BufToPathError::File(value))
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum BufToPathError {
-    #[error("Error when converting buf to directory: {0}")]
-    Dir(PathBuf),
-    #[error("Error when converting buf to file: {0}")]
-    File(PathBuf)
-}
-
 enum PathTree<'a> {
-    Dir(&'a Path<Dir>, Vec<&'a PathTree<'a>>),
-    File(&'a Path<File>)
-}
-
-impl<'a> PathTree<'a> {
-    fn from_dir(path: &'a Path<Dir>) -> Self {
-        Self::Dir(path, Vec::new())
-    }
-
-    fn from_file(path: &'a Path<File>) -> Self {
-        Self::File(path)
-    }
+    Dir { buf: &'a PathBuf, entries: Vec<&'a PathTree<'a>> },
+    File { buf: &'a PathBuf }
 }
 
 fn main() {
-    let pool = ThreadPool::new(8);
+    let workers = 8;
+    let pool = ThreadPool::new(workers);
     let Cli::Gen(args) = Cli::parse();
 
-    let (input, output) = mpsc::channel();
+    let (sender, receiver) = mpsc::channel();
+    let receiver = Arc::new(Mutex::new(receiver));
+
     for buf in args.paths {
-        let input = input.clone();
+        sender.send(buf).unwrap();
+    }
+
+    for _ in 0..workers {
+        let sender = sender.clone();
+        let receiver = receiver.clone();
+
         pool.execute(move || {
-            let path: Path<File> = buf.try_into().unwrap();
-            input.send(path).unwrap();
+            // TODO! Very wonky implementation... should be reworked - study crossbeam::channel?
+            loop {
+                let buf = {
+                    let guard = receiver.lock().unwrap();
+                    guard.recv()
+                };
+
+                match buf {
+                    Ok(buf) => {
+                        if buf.is_dir() {
+                            for dir_entry in fs::read_dir(&buf).unwrap() {
+                                match dir_entry {
+                                    Ok(entry) => sender.send(entry.path()).unwrap(),
+                                    Err(_) => eprintln!("Error readir dir_entry")
+                                }
+                            }
+                        }
+
+                        if buf.is_file() {
+                            println!("{}\n{}", buf.display(), fs::read_to_string(&buf).unwrap());
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
         });
     }
 
-    drop(input);
-
-    for path in output {
-        println!("{path}");
-    }
+    drop(sender);
+    pool.join();
 }
