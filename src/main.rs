@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, sync::{mpsc, Arc, Mutex}};
+use std::{fs, path::PathBuf, sync::{atomic::{AtomicU32, Ordering}, Arc}};
 use clap::Parser;
 use threadpool::ThreadPool;
 
@@ -14,56 +14,48 @@ struct GenArgs {
     paths: Vec<PathBuf>
 }
 
-enum PathTree<'a> {
-    Dir { buf: &'a PathBuf, entries: Vec<&'a PathTree<'a>> },
-    File { buf: &'a PathBuf }
-}
-
 fn main() {
     let workers = 8;
     let pool = ThreadPool::new(workers);
     let Cli::Gen(args) = Cli::parse();
 
-    let (sender, receiver) = mpsc::channel();
-    let receiver = Arc::new(Mutex::new(receiver));
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    let pending = Arc::new(AtomicU32::new(0));
 
     for buf in args.paths {
-        sender.send(buf).unwrap();
+        pending.fetch_add(1, Ordering::Relaxed);
+        sender.send(Some(buf)).unwrap();
     }
 
     for _ in 0..workers {
         let sender = sender.clone();
         let receiver = receiver.clone();
+        let pending = pending.clone();
 
         pool.execute(move || {
-            // TODO! Very wonky implementation... should be reworked - study crossbeam::channel?
-            loop {
-                let buf = {
-                    let guard = receiver.lock().unwrap();
-                    guard.recv()
-                };
-
-                match buf {
-                    Ok(buf) => {
-                        if buf.is_dir() {
-                            for dir_entry in fs::read_dir(&buf).unwrap() {
-                                match dir_entry {
-                                    Ok(entry) => sender.send(entry.path()).unwrap(),
-                                    Err(_) => eprintln!("Error readir dir_entry")
-                                }
-                            }
-                        }
-
-                        if buf.is_file() {
-                            println!("{}\n{}", buf.display(), fs::read_to_string(&buf).unwrap());
-                        }
+            while let Ok(Some(path)) = receiver.recv() {
+                if path.is_dir() {
+                    if let Ok(dir) = fs::read_dir(&path) {
+                        dir.for_each(|dir_entry| match dir_entry {
+                            Ok(dir_entry) => {
+                                pending.fetch_add(1, Ordering::Relaxed);
+                                sender.send(Some(dir_entry.path())).unwrap();
+                            },
+                            Err(_) => eprintln!("error reading dir"),
+                        });
                     }
-                    Err(_) => break,
+                } else if path.is_file() {
+                    println!("{} - {}", path.display(), fs::read_to_string(&path).unwrap_or_else(|_| "err".into()));
+                }
+
+                if pending.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    for _ in 0..workers {
+                        sender.send(None).unwrap();
+                    }
                 }
             }
         });
     }
 
-    drop(sender);
     pool.join();
 }
