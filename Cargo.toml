@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.41", features = ["derive"] }
+crossbeam-channel = "0.5.15"
 thiserror = "2.0.12"
-threadpool = "1.8.1"
 
 [lints.rust]
 unsafe_code = "forbid"
