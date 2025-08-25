@@ -1,4 +1,6 @@
-use std::{fs, path::PathBuf, sync::{atomic::{AtomicU32, Ordering}}, thread};
+mod core;
+
+use std::{fs::{self, File}, path::Path, sync::atomic::{AtomicU32, Ordering}, thread};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -45,7 +47,7 @@ fn main() {
                     } else if path.is_file() {
                         println!("found file {}", path.display());
                     }
-
+                    
                     if pending.fetch_sub(1, Ordering::Relaxed) == 1 {
                         for _ in 0..workers {
                             sender.send(None).expect("should send poison pill");
