@@ -22,17 +22,13 @@ pub enum SectionFromStrError {
 
 #[derive(Debug, Clone)]
 pub struct Section {
-    start: usize,
-    end: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl Section {
-    pub const fn start(&self) -> &usize {
-        &self.start
-    }
-
-    pub const fn end(&self) -> &usize {
-        &self.end
+    pub const fn size(&self) -> usize {
+        self.end - self.start
     }
 }
 

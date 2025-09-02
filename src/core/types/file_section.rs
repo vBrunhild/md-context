@@ -1,8 +1,10 @@
-use crate::core::{
-    traits::ReadLines,
-    types::{Line, Section, SectionFromStrError},
+use crate::core::types::{Line, Section, SectionFromStrError};
+use smol::{
+    fs::File,
+    io::{self, AsyncBufReadExt},
+    stream::StreamExt,
 };
-use std::{fs::File, io, path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FileSectionNewError {
@@ -21,8 +23,20 @@ pub struct FileSection {
 }
 
 impl FileSection {
-    pub fn read_lines(self) -> Result<impl Iterator<Item = Result<Line, io::Error>>, io::Error> {
-        Ok(File::open(self.file)?.read_lines(self.section))
+    pub async fn read_lines(self) -> Vec<(usize, Result<String, io::Error>)> {
+        io::BufReader::new(File::open(self.file).await.unwrap())
+            .lines()
+            .enumerate()
+            .skip(self.section.start - 1)
+            .map_while(|(index, content)| {
+                index += 1;
+                if index < self.section.size() - 1 {
+                    Some((index, content))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
