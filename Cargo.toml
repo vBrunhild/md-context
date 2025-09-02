@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.41", features = ["derive"] }
 crossbeam-channel = "0.5.15"
+smol = "2.0.2"
 thiserror = "2.0.12"
 
 [lints.rust]
