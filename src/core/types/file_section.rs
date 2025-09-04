@@ -1,9 +1,4 @@
-use crate::core::types::{Line, Section, SectionFromStrError};
-use smol::{
-    fs::File,
-    io::{self, AsyncBufReadExt},
-    stream::StreamExt,
-};
+use crate::core::types::{Section, SectionFromStrError};
 use std::{path::PathBuf, str::FromStr};
 
 #[derive(Debug, thiserror::Error)]
@@ -16,27 +11,23 @@ pub enum FileSectionNewError {
     SplitFail(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FileSection {
-    file: PathBuf,
+    file_path: PathBuf,
     section: Section,
 }
 
 impl FileSection {
-    pub async fn read_lines(self) -> Vec<(usize, Result<String, io::Error>)> {
-        io::BufReader::new(File::open(self.file).await.unwrap())
-            .lines()
-            .enumerate()
-            .skip(self.section.start - 1)
-            .map_while(|(index, content)| {
-                index += 1;
-                if index < self.section.size() - 1 {
-                    Some((index, content))
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub const fn start(&self) -> usize {
+        self.section.start
+    }
+
+    pub const fn end(&self) -> usize {
+        self.section.end
+    }
+
+    pub const fn file_path(&self) -> &PathBuf {
+        &self.file_path
     }
 }
 
@@ -52,7 +43,7 @@ impl FromStr for FileSection {
         let section: Section = section.parse()?;
 
         if file.is_file() {
-            Ok(Self { file, section })
+            Ok(Self { file_path: file, section })
         } else {
             Err(FileSectionNewError::IsNotFile(file))
         }
